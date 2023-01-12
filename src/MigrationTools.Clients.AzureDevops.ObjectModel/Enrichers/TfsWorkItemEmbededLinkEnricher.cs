@@ -30,8 +30,8 @@ namespace MigrationTools.Enrichers
             {
                 try
                 {
-                    TfsTeamService teamService = Engine.Target.GetService<TfsTeamService>();
-                    TfsConnection connection = (TfsConnection)Engine.Target.InternalCollection;
+                    var teamService = Engine.Target.GetService<TfsTeamService>();
+                    var connection = (TfsConnection) Engine.Target.InternalCollection;
 
                     var identityService = Engine.Target.GetService<IIdentityManagementService>();
                     var tfi = identityService.ReadIdentity(IdentitySearchFactor.General, "Project Collection Valid Users", MembershipQuery.Expanded, ReadIdentityOptions.None);
@@ -54,8 +54,8 @@ namespace MigrationTools.Enrichers
         [Obsolete]
         public override int Enrich(WorkItemData sourceWorkItem, WorkItemData targetWorkItem)
         {
-            string oldTfsurl = Engine.Source.Config.AsTeamProjectConfig().Collection.ToString();
-            string newTfsurl = Engine.Target.Config.AsTeamProjectConfig().Collection.ToString();
+            var oldTfsurl = Engine.Source.Config.AsTeamProjectConfig().ToString();
+            var newTfsurl = Engine.Target.Config.AsTeamProjectConfig().ToString();
 
             Log.LogInformation("{LogTypeName}: Fixing embedded mention links on target work item {targetWorkItemId} from {oldTfsurl} to {newTfsurl}", LogTypeName, targetWorkItem.Id, oldTfsurl, newTfsurl);
 
@@ -70,16 +70,17 @@ namespace MigrationTools.Enrichers
 
                 try
                 {
-                    var anchorTagMatches = Regex.Matches((string)field.Value, RegexPatternLinkAnchorTag);
+                    var anchorTagMatches = Regex.Matches((string) field.Value, RegexPatternLinkAnchorTag);
                     foreach (Match anchorTagMatch in anchorTagMatches)
                     {
-                        if (!anchorTagMatch.Success) continue;
+                        if (!anchorTagMatch.Success)
+                            continue;
 
                         var href = anchorTagMatch.Groups["href"].Value;
                         var version = anchorTagMatch.Groups["version"].Value;
                         var value = anchorTagMatch.Groups["value"].Value;
 
-                        if (string.IsNullOrWhiteSpace(href) || string.IsNullOrWhiteSpace(version) || string.IsNullOrWhiteSpace(value))
+                        if (string.IsNullOrWhiteSpace(href) || string.IsNullOrWhiteSpace(value))
                             continue;
 
                         var workItemLinkMatch = Regex.Match(href, RegexPatternWorkItemUrl);
@@ -87,6 +88,31 @@ namespace MigrationTools.Enrichers
                         {
                             var workItemId = workItemLinkMatch.Groups["id"].Value;
                             Log.LogDebug("{LogTypeName}: Source work item {workItemId} mention link traced on field {fieldName} on target work item {targetWorkItemId}.", LogTypeName, workItemId, field.Name, targetWorkItem.Id);
+                            var sourceLinkWi = Engine.Source.WorkItems.GetWorkItem(workItemId);
+                            if (sourceLinkWi != null)
+                            {
+                                var linkWI = Engine.Target.WorkItems.FindReflectedWorkItemByReflectedWorkItemId(sourceLinkWi);
+                                if (linkWI != null)
+                                {
+                                    var replaceValue = anchorTagMatch.Value.Replace(workItemId, linkWI.Id).Replace(oldTfsurl, newTfsurl);
+                                    field.Value = field.Value.ToString().Replace(anchorTagMatch.Value, replaceValue);
+                                    Log.LogInformation("{LogTypeName}: Source work item {workItemId} mention link was successfully replaced with target work item {linkWIId} mention link on field {fieldName} on target work item {targetWorkItemId}.", LogTypeName, workItemId, linkWI.Id, field.Name, targetWorkItem.Id);
+                                }
+                                else
+                                {
+                                    var replaceValue = value;
+                                    field.Value = field.Value.ToString().Replace(anchorTagMatch.Value, replaceValue);
+                                    Log.LogError("{LogTypeName}: [SKIP] Matching target work item mention link for source work item {workItemId} mention link on field {fieldName} on target work item {targetWorkItemId} was not found on the target collection. So link is replaced with just simple text.", LogTypeName, workItemId, field.Name, targetWorkItem.Id);
+                                }
+                            }
+                            else
+                            {
+                                Log.LogInformation("{LogTypeName}: [SKIP] Source work item {workItemId} mention link on field {fieldName} on target work item {targetWorkItemId} was not found on the source collection.", LogTypeName, workItemId, field.Name, targetWorkItem.Id);
+                            }
+                        }
+                        else if (href.StartsWith("x-mvwit:workitem/"))
+                        {
+                            var workItemId = href.Substring(17);
                             var sourceLinkWi = Engine.Source.WorkItems.GetWorkItem(workItemId);
                             if (sourceLinkWi != null)
                             {
@@ -109,7 +135,7 @@ namespace MigrationTools.Enrichers
                                 Log.LogInformation("{LogTypeName}: [SKIP] Source work item {workItemId} mention link on field {fieldName} on target work item {targetWorkItemId} was not found on the source collection.", LogTypeName, workItemId, field.Name, targetWorkItem.Id);
                             }
                         }
-                        else if ((href.StartsWith("mailto:") || href.StartsWith("#")) && value.StartsWith("@"))
+                        else if (!string.IsNullOrWhiteSpace(version) && (href.StartsWith("mailto:") || href.StartsWith("#")) && value.StartsWith("@"))
                         {
                             var displayName = value.Substring(1);
                             Log.LogDebug("{LogTypeName}: User identity {displayName} mention traced on field {fieldName} on target work item {targetWorkItemId}.", LogTypeName, displayName, field.Name, targetWorkItem.Id);
